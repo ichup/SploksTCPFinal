@@ -1,0 +1,198 @@
+using System;
+using System.Collections;
+using System.Collections.Generic;
+using System.Linq;
+using System.Text;
+using System.Threading.Tasks;
+using System.Threading;
+using System.Net;
+using System.Net.Sockets;
+using System.IO;
+
+
+namespace Spolks.NetClient
+{
+    class Client
+    {
+        #region Globals
+        ConsoleKeyInfo cki = new ConsoleKeyInfo();
+        #endregion
+        #region Создание клиента
+        public Client(IPAddress ip, int port, string protocolType, string _filename)
+        {
+            ClientStart(ip, port, protocolType, _filename);
+         //   fileName = _filename;
+        }
+        #endregion
+        #region Запуск клиента
+        void ClientStart(IPAddress ip, int port, string protocolType, string _filename)
+        {
+            if(protocolType == "tcp")
+            {
+                //TcpClient tcpClient = new TcpClient();
+                Socket tcpClient = new Socket(SocketType.Stream, ProtocolType.Tcp);
+
+                while (!tcpClient.Connected)
+                {
+                    try
+                    {
+                        tcpClient.Connect(ip, port);
+                    }
+                    catch (Exception ex)
+                    {
+                        Console.WriteLine("\nConnection failed. Trying to reconnect...");
+                    }
+                    Thread.Sleep(1000);
+                }
+                TCPWork(tcpClient, _filename);
+            }
+            if(protocolType == "udp")
+            {
+                UdpClient udpClient = new UdpClient();
+                bool fuckconst = true;
+                while (fuckconst) //!udpClient.Connected
+                {
+                    try
+                    {
+                        udpClient.Connect(ip, port);
+                    }
+                    catch (Exception ex) 
+                    {
+                        Console.WriteLine("\nConnection failed. Trying to reconnect...");
+                    }
+                    Thread.Sleep(1000);
+                }
+                UDPWork(udpClient);
+            }
+            return;
+        }
+        #endregion
+        #region Работа с файлом TCP
+        void TCPWork(Socket _tcpClient, string _fileName)
+        {
+            #region Анализ файлов, инициализация передачи
+            int socketResult;
+            byte[] recvbuff = new byte[1024];
+            int ByteReceived = 0;
+            string filepath = "C:\\send.rar"; //исходный файл
+      /*      if (!File.Exists(filepath)) //если не существует
+            {
+                Console.WriteLine("Error! Cannot find file!");
+                _tcpClient.Close();
+                return;
+            }*/
+            byte[] msg = Encoding.UTF8.GetBytes(_fileName); 
+
+            try { _tcpClient.Send(msg); } //отправка имени файла
+            catch (Exception ex) { }
+
+            try { ByteReceived = _tcpClient.Receive(recvbuff); } //получение длины файла на сервере
+            catch (Exception ex) { }
+
+
+            string tmp = Encoding.Default.GetString(recvbuff);
+            int serverFileLength = Convert.ToInt32(tmp.Substring(0, ByteReceived));
+            Console.WriteLine("Длина файла на сервере " + serverFileLength);
+            FileStream _fileStream = File.Open(filepath, FileMode.Open); //открываем файл на клиенте
+            FileInfo fileInfo = new FileInfo(filepath);
+            int clientFileLength = Convert.ToInt32(fileInfo.Length);
+            _fileStream.Seek(serverFileLength, SeekOrigin.Current); //смещаем для докачки
+            byte[] finmsg = Encoding.UTF8.GetBytes(clientFileLength.ToString());
+
+            try { _tcpClient.Send(finmsg); } //отправка длины файла на клиенте
+            catch (Exception ex) { } 
+
+            if(serverFileLength == clientFileLength)
+            {
+               Console.WriteLine("File has already been uploaded.");
+                _tcpClient.Close();
+                return;
+            }
+            _tcpClient.ReceiveTimeout = 1;
+            _tcpClient.SendTimeout = 1;
+            #endregion
+            #region Передача файла
+            int x = 1;
+            Console.WriteLine("Sending file...");
+            while (serverFileLength < clientFileLength)
+            {
+                
+                byte[] fileBuf = new byte[1024];
+                byte[] oobBuf = new byte[1];
+                #region Срочные данные
+               // ConsoleKeyInfo keyInfo;
+                //keyInfo = Console.ReadKey();
+                
+                if (Console.KeyAvailable == true) //если нужен статус закачки
+                {
+                    cki = Console.ReadKey(true);
+                    if (cki.Key == ConsoleKey.Z)
+                    {
+                        byte oob = 1;
+                        try { _tcpClient.Send(oobBuf, SocketFlags.OutOfBand); }
+                        catch (Exception ex) { }
+                    }
+                }
+                if (_tcpClient.Poll(0, SelectMode.SelectError)) //проверка на приход внеполосных данных
+                {
+                    ByteReceived = 0;
+                    try { ByteReceived = _tcpClient.Receive(oobBuf, SocketFlags.OutOfBand); }
+                    catch (Exception ex) { }
+                    if (ByteReceived > 0) //если пришли выводи информацию о состоянии закачки
+                    {
+                        
+                        double byteStatus = (double)serverFileLength / (double)clientFileLength * 100;
+                        //Console.Clear();
+                        Console.WriteLine(byteStatus + "%");
+                    }
+                }
+                #endregion
+                #region Файловые данные
+                if (x == 244)
+                {
+                    x = 244;
+                }
+                int bytes = _fileStream.Read(fileBuf, 0, 1024);
+             //   string _tmp = Encoding.Default.GetString(fileBuf);
+              //  _tmp = _tmp.Substring(0, bytes);
+              //  byte[] _msg = Encoding.UTF8.GetBytes(_tmp);
+                byte[] _msg = new byte[bytes];
+                Array.Copy(fileBuf, _msg, bytes);
+               // _msg = (from elem in fileBuf where elem != null select elem).ToArray();
+               // byte[] _msg = (from elem in fileBuf where elem != null select elem).ToArray();
+                int sendResult = 0;
+
+                try { sendResult = _tcpClient.Send(_msg); }
+                catch(Exception ex){}
+
+                Array.Clear(_msg, 0, _msg.Length);
+                serverFileLength += sendResult;
+                Console.WriteLine(x + ": " + serverFileLength + "rb " + bytes + "msg" + sendResult); x++;
+                #endregion
+            }
+            Console.WriteLine("File has been successfully uploaded!");
+            _fileStream.Close();
+            _tcpClient.Close();
+            
+            #endregion
+        }
+        #endregion
+        #region Работа с файлом UDP
+        void UDPWork(UdpClient _client)
+        {
+
+        }
+        #endregion
+    }
+
+
+    class Program
+    {
+        static void Main(string[] args)
+        {
+
+            Client _client = new Client(IPAddress.Parse(args[0]), Convert.ToInt32(args[1]), args[2], args[3]);
+            Thread.Sleep(10000);
+        }
+    }
+}
